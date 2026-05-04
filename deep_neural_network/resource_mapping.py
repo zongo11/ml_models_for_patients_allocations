@@ -1,0 +1,27 @@
+"""Correspondance besoins patient (colonnes Excel patients) ↔ capacités hôpital (Book1.xlsx)."""
+
+RESOURCE_MAPPINGS = {
+    "Lit": {"p": "Lits_totaux", "h": "Lits totaux"},
+    "Rea_Lit": {"p": "Rea_lits", "h": "Réa (lits)"},
+    "Medecin": {"p": "Medecins", "h": "Médecins"},
+    "Infirmier": {"p": "Infirmiers", "h": "Infirmiers"},
+    "Urgentiste": {"p": "Urgentistes", "h": "Urgentistes"},
+    "Reanimateur": {"p": "Reanimateurs", "h": "Réanimateurs"},
+    "Anesth_Rea": {"p": "Anesth_Rea", "h": "Anesth.-Réa"},
+    "Pneumo": {"p": "Pneumo", "h": "Pneumo"},
+    "Cardio": {"p": "Cardio", "h": "Cardio"},
+    "Neuro": {"p": "Neuro", "h": "Neuro"},
+    "Interniste": {"p": "Internistes", "h": "Internistes"},
+    "Chirurgien": {"p": "Chirurgiens", "h": "Chirurgiens"},
+    "Pediatre": {"p": "Pediatres", "h": "Pédiatres"},
+    "Biologiste": {"p": "Biologistes", "h": "Biologistes"},
+    "Radiologue": {"p": "Radiologues", "h": "Radiologues"},
+    "O2": {"p": "O2", "h": "O₂"},
+    "Ventilateur": {"p": "Ventilateur", "h": "Ventilateurs"},
+    "Sang": {"p": "Sang", "h": "Sang (unités)"},
+    "Moniteur": {"p": "Moniteurs", "h": "Moniteurs"},
+    "Defibrillateur": {"p": "Defibrillateur", "h": "Défibrillateurs"},
+    "Monitoring": {"p": "Monitoring", "h": "Moniteurs"},
+    "Labo": {"p": "Labo", "h": "Labo"},
+    "Imagerie": {"p": "Imagerie", "h": "Imagerie"},
+}

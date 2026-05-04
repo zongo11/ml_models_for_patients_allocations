@@ -1,0 +1,9 @@
+H: ['Hôpital', 'Long', 'Lat', 'Médecins', 'Infirmiers', 'Urgentistes', 'Réanimateurs', 'Anesth.-Réa', 'Pneumo', 'Cardio', 'Neuro', 'Internistes', 'Chirurgiens', 'Pédiatres', 'Biologistes', 'Radiologues', 'Labo', 'Imagerie', 'O₂', 'Ventilateurs', 'Moniteurs', 'Défibrillateurs', 'Sang (unités)', 'Réa (lits)', 'Lits totaux', "kit d'urgence"]
+
+P: ['ID', 'Timestamp', 'ESI', 'Service', 'Mots_cles', 'SpO2', 'FC', 'FR', 'GCS', 'O2', 'Ventilateur', 'Sang', 'Defibrillateur', 'Monitoring', 'Reanimation', 'Labo', 'Imagerie', 'Medecins', 'Infirmiers', 'Urgentistes', 'Reanimateurs', 'Anesth_Rea', 'Pneumo', 'Cardio', 'Neuro', 'Internistes', 'Chirurgiens', 'Pediatres', 'Biologistes', 'Radiologues', 'Moniteurs', 'Rea_lits', 'Lits_totaux', 'Temps_Attente', 'Latitude', 'Longitude']
+
+H_head:
+[{'Hôpital': 'Centre Hospitalier Universitaire Yalgado Ouédraogo', 'Long': -1.5064573, 'Lat': 12.3835886, 'Médecins': 120.0, 'Infirmiers': 300.0, 'Urgentistes': 25.0, 'Réanimateurs': 15, 'Anesth.-Réa': 18.0, 'Pneumo': 6.0, 'Cardio': 5.0, 'Neuro': 4.0, 'Internistes': 10.0, 'Chirurgiens': 15.0, 'Pédiatres': 12.0, 'Biologistes': 6.0, 'Radiologues': 5.0, 'Labo': 1.0, 'Imagerie': 1.0, 'O₂': 150.0, 'Ventilateurs': 25.0, 'Moniteurs': 60.0, 'Défibrillateurs': 15.0, 'Sang (unités)': 200.0, 'Réa (lits)': 20.0, 'Lits totaux': 800.0, "kit d'urgence": 1.0}]
+
+P_head:
+[{'ID': 1, 'Timestamp': '2024-01-01 00:01:00', 'ESI': 4, 'Service': 'Médecine', 'Mots_cles': 'douleur légère', 'SpO2': 85, 'FC': 82, 'FR': 32, 'GCS': 4, 'O2': 1, 'Ventilateur': 1, 'Sang': 0, 'Defibrillateur': 0, 'Monitoring': 0, 'Reanimation': 0, 'Labo': 0, 'Imagerie': 0, 'Medecins': 1, 'Infirmiers': 1, 'Urgentistes': 0, 'Reanimateurs': 0, 'Anesth_Rea': 0, 'Pneumo': 0, 'Cardio': 0, 'Neuro': 0, 'Internistes': 0, 'Chirurgiens': 0, 'Pediatres': 1, 'Biologistes': 0, 'Radiologues': 0, 'Moniteurs': 0, 'Rea_lits': 0, 'Lits_totaux': 0, 'Temps_Attente': 35, 'Latitude': 12.362048, 'Longitude': -1.512755}]

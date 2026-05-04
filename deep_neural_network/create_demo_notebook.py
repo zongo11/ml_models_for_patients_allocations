@@ -1,0 +1,277 @@
+import json
+
+cells = [
+    {
+        "cell_type": "markdown", "metadata": {},
+        "source": [
+            "# Démo — Système d'Allocation Dynamique\n\n",
+            "Simule l'arrivée de patients en temps réel avec :\n",
+            "- File de priorité **ESI FIFO**\n",
+            "- **Zone de quarantaine** pour patients non allouables\n",
+            "- **Réinjection automatique** à chaque libération de ressources\n"
+        ]
+    },
+    # ── 1. Setup ─────────────────────────────────────────────────────────────
+    {
+        "cell_type": "markdown", "metadata": {},
+        "source": [
+            "## 1. Chargement du Modèle Entraîné\n\n",
+            "Avant de lancer la simulation, on charge tous les artefacts produits par `dnn_patient_allocation.ipynb` :\n\n",
+            "| Artefact | Rôle |\n",
+            "| --- | --- |\n",
+            "| `dnn_weights.pt` | Poids du DNN PyTorch entraîné |\n",
+            "| `scaler_p.pkl` | Normaliseur des features patients |\n",
+            "| `scaler_h.pkl` | Normaliseur des features hôpitaux + distance |\n",
+            "| `label_encoder.pkl` | Encodeur des noms d'hôpitaux |\n\n",
+            "> `allocation_system.py` est importé pour accéder à `AllocationEngine`, `Patient`, `QuarantineZone`, etc."
+        ]
+    },
+    {
+        "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+        "source": [
+            "import sys, pickle, torch, time\n",
+            "import numpy as np\n",
+            "import pandas as pd\n",
+            "import matplotlib.pyplot as plt\n",
+            "import matplotlib.patches as mpatches\n",
+            "from pathlib import Path\n\n",
+            "ROOT = Path.cwd()\n",
+            "sys.path.insert(0, str(ROOT))\n\n",
+            "from allocation_system import (\n",
+            "    AllocationEngine, Patient, PatientQueue, QuarantineZone,\n",
+            "    HospitalState, PATIENT_FEATURES, HOSP_RES_COLS\n",
+            ")\n\n",
+            "# Charger le modèle entraîné\n",
+            "OUT = ROOT / 'output'\n",
+            "DEVICE = torch.device('cpu')\n\n",
+            "import torch.nn as nn\n",
+            "class PatientAllocationDNN(nn.Module):\n",
+            "    def __init__(self, input_dim):\n",
+            "        super().__init__()\n",
+            "        self.net = nn.Sequential(\n",
+            "            nn.Linear(input_dim, 256), nn.BatchNorm1d(256), nn.ReLU(), nn.Dropout(0.3),\n",
+            "            nn.Linear(256, 128),       nn.BatchNorm1d(128), nn.ReLU(), nn.Dropout(0.3),\n",
+            "            nn.Linear(128,  64),       nn.BatchNorm1d(64),  nn.ReLU(), nn.Dropout(0.2),\n",
+            "            nn.Linear( 64,  32),       nn.ReLU(),\n",
+            "            nn.Linear( 32,   1),\n",
+            "        )\n",
+            "    def forward(self, x): return self.net(x).squeeze(-1)\n\n",
+            "INPUT_DIM = len(PATIENT_FEATURES) + len(HOSP_RES_COLS) + 1\n",
+            "model = PatientAllocationDNN(INPUT_DIM)\n",
+            "model.load_state_dict(torch.load(OUT/'dnn_weights.pt', map_location=DEVICE))\n",
+            "model.eval()\n\n",
+            "with open(OUT/'scaler_p.pkl','rb') as f: scaler_p = pickle.load(f)\n",
+            "with open(OUT/'scaler_h.pkl','rb') as f: scaler_h = pickle.load(f)\n",
+            "with open(OUT/'label_encoder.pkl','rb') as f: le = pickle.load(f)\n\n",
+            "patients  = pd.read_excel(ROOT.parent/'xgboost_model'/'patients_1000_ULTRA_COMPLET.xlsx')\n",
+            "hospitals = pd.read_excel(ROOT/'Book1.xlsx')\n",
+            "print('Système chargé.')"
+        ]
+    },
+    # ── 2. Initialisation du moteur ──────────────────────────────────────────
+    {
+        "cell_type": "markdown", "metadata": {},
+        "source": [
+            "## 2. Initialisation du Moteur d'Allocation\n\n",
+            "`AllocationEngine` est le chef d'orchestre du système. À l'initialisation :\n\n",
+            "- Crée un objet `HospitalState` pour **chacun des 22 hôpitaux** avec ses ressources initiales\n",
+            "- Instancie une **file principale** (`PatientQueue` triée par ESI)\n",
+            "- Instancie une **zone de quarantaine** (`QuarantineZone`) vide\n\n",
+            "Le dashboard initial montre tous les hôpitaux à **0% de saturation** (ressources pleines)."
+        ]
+    },
+    {
+        "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+        "source": [
+            "engine = AllocationEngine(\n",
+            "    model=model,\n",
+            "    scaler_p=scaler_p,\n",
+            "    scaler_h=scaler_h,\n",
+            "    label_encoder=le,\n",
+            "    hospitals_df=hospitals,\n",
+            "    device=DEVICE,\n",
+            ")\n",
+            "print('Moteur d\\'allocation initialisé.')\n",
+            "print(engine.dashboard().to_string(index=False))"
+        ]
+    },
+    # ── 3. Simulation — arrivée de 50 patients ───────────────────────────────
+    {
+        "cell_type": "markdown", "metadata": {},
+        "source": [
+            "## 3. Simulation — Arrivée de 50 Patients\n\n",
+            "On sélectionne 50 patients aléatoires et on les ajoute à la **file principale**.\n\n",
+            "**Règle de priorité ESI (Emergency Severity Index) :**\n\n",
+            "| ESI | Urgence | Traitement |\n",
+            "| --- | --- | --- |\n",
+            "| 1 | Critique (réanimation immédiate) | Traité en **premier** |\n",
+            "| 2 | Urgence majeure | Traité en **deuxième** |\n",
+            "| 3 | Urgence modérée | Traité en **troisième** |\n",
+            "| 4 | Urgence mineure | Traité en **quatrième** |\n",
+            "| 5 | Non urgent | Traité en **dernier** |\n\n",
+            "> À ESI égal, l'ordre FIFO (heure d'arrivée) est respecté grâce au `arrival_counter`."
+        ]
+    },
+    {
+        "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+        "source": [
+            "# Admettre 50 patients dans la file principale (ESI FIFO)\n",
+            "sample = patients.sample(50, random_state=42).reset_index(drop=True)\n",
+            "for _, row in sample.iterrows():\n",
+            "    p = Patient(id=int(row['ID']), features=row.to_dict())\n",
+            "    engine.admit(p)\n\n",
+            "print(f'File principale : {len(engine.main_queue)} patients')\n",
+            "print(f'ESI du prochain patient : {engine.main_queue.peek_esi()}')"
+        ]
+    },
+    # ── 4. Traitement de la file ─────────────────────────────────────────────
+    {
+        "cell_type": "markdown", "metadata": {},
+        "source": [
+            "## 4. Traitement de la File — Allocation par le DNN\n\n",
+            "**`engine.process_all()`** vide la file principale en traitant chaque patient dans l'ordre ESI :\n\n",
+            "```",
+            "Pour chaque patient (par ordre ESI) :\n",
+            "  1. Calculer le score DNN pour chacun des 22 hôpitaux\n",
+            "  2. Filtrer les hôpitaux saturés (≥ 95% lits occupés)\n",
+            "  3. Vérifier la faisabilité des ressources en temps réel\n",
+            "  4a. Si hôpital trouvé → allouer + consommer les ressources\n",
+            "  4b. Sinon → placer le patient en zone de quarantaine\n",
+            "```"
+        ]
+    },
+    {
+        "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+        "source": [
+            "print('Traitement de la file...')\n",
+            "log = engine.process_all()\n",
+            "stats = engine.global_stats()\n",
+            "print('\\n=== STATISTIQUES ===')\n",
+            "for k, v in stats.items(): print(f'  {k}: {v}')\n",
+            "print('\\nDashboard hôpitaux:')\n",
+            "print(engine.dashboard().to_string(index=False))"
+        ]
+    },
+    # ── 5. Visualisation de la quarantaine ───────────────────────────────────
+    {
+        "cell_type": "markdown", "metadata": {},
+        "source": [
+            "## 5. Visualisation des Résultats\n\n",
+            "Deux graphiques sont générés :\n\n",
+            "**Graphique gauche — Répartition des allocations par hôpital**\n",
+            "Montre combien de patients ont été envoyés vers chaque hôpital.\n\n",
+            "**Graphique droite — Taux de saturation**\n",
+            "- 🟢 Vert : < 50% (hôpital disponible)\n",
+            "- 🟠 Orange : 50–80% (capacité partielle)\n",
+            "- 🔴 Rouge : > 80% (proche de la saturation)\n",
+            "- Ligne rouge pointillée : seuil de 95% (= saturation critique → hôpital exclu)"
+        ]
+    },
+    {
+        "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+        "source": [
+            "fig, axes = plt.subplots(1, 2, figsize=(14, 5))\n\n",
+            "# Répartition des allocations par hôpital\n",
+            "df_log = engine.allocation_summary()\n",
+            "if not df_log.empty:\n",
+            "    counts = df_log['hospital'].value_counts()\n",
+            "    counts.plot(kind='barh', ax=axes[0], color='steelblue')\n",
+            "    axes[0].set_title('Patients alloués par hôpital')\n",
+            "    axes[0].set_xlabel('Nombre de patients')\n\n",
+            "# Saturation des hôpitaux\n",
+            "dash = engine.dashboard()\n",
+            "colors = ['tomato' if s > 80 else 'orange' if s > 50 else 'mediumseagreen'\n",
+            "          for s in dash['saturation_%']]\n",
+            "axes[1].barh(dash['hospital'], dash['saturation_%'], color=colors)\n",
+            "axes[1].axvline(95, color='red', linestyle='--', label='Seuil saturation')\n",
+            "axes[1].set_title('Taux de saturation des hôpitaux (%)')\n",
+            "axes[1].legend()\n",
+            "plt.tight_layout()\n",
+            "plt.savefig(OUT/'simulation_results.png', dpi=120)\n",
+            "plt.show()"
+        ]
+    },
+    # ── 6. Simulation de libération + réinjection ────────────────────────────
+    {
+        "cell_type": "markdown", "metadata": {},
+        "source": [
+            "## 6. Libération de Ressources & Réinjection Dynamique\n\n",
+            "Simule la **sortie de patients** d'un hôpital (fin de traitement) :\n\n",
+            "**`engine.release_patient(patient, hopital)`** effectue en séquence :\n",
+            "1. **Libère** les ressources consommées par ce patient dans l'hôpital (`HospitalState.release()`)\n",
+            "2. Déclenche automatiquement **`reinject()`** sur la zone de quarantaine\n",
+            "3. Tente de réallouer chaque patient en quarantaine (dans l'ordre ESI) avec les nouvelles ressources\n",
+            "4. Les patients encore non allouables **retournent en quarantaine**\n\n",
+            "> Ce mécanisme simule le flux temps-réel du schéma d'architecture : la **réinjection** depuis la buffer zone."
+        ]
+    },
+    {
+        "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+        "source": [
+            "print(f'Patients en quarantaine AVANT libération: {len(engine.quarantine)}')\n\n",
+            "# Simuler la sortie de 5 patients de l'hôpital le plus chargé\n",
+            "dash = engine.dashboard().sort_values('patients_allocated', ascending=False)\n",
+            "busiest_hospital = dash.iloc[0]['hospital']\n",
+            "print(f'Hôpital le plus chargé: {busiest_hospital}')\n\n",
+            "df_log = engine.allocation_summary()\n",
+            "if not df_log.empty:\n",
+            "    discharged = df_log[df_log['hospital'] == busiest_hospital].head(5)\n",
+            "    for _, alloc in discharged.iterrows():\n",
+            "        # Reconstruire le patient depuis ses données\n",
+            "        pid  = alloc['patient_id']\n",
+            "        prow = patients[patients['ID'] == pid]\n",
+            "        if prow.empty: continue\n",
+            "        p = Patient(id=pid, features=prow.iloc[0].to_dict())\n",
+            "        result = engine.release_patient(p, busiest_hospital)\n",
+            "        print(f'  Patient {pid} sorti → réinjection: {result}')\n\n",
+            "print(f'\\nPatients en quarantaine APRÈS réinjection: {len(engine.quarantine)}')\n",
+            "print('\\nStats finales:', engine.global_stats())"
+        ]
+    },
+    # ── 7. Log de quarantaine ────────────────────────────────────────────────
+    {
+        "cell_type": "markdown", "metadata": {},
+        "source": [
+            "## 7. Analyse de la Zone de Quarantaine\n\n",
+            "La `QuarantineZone` maintient un **log horodaté** de toutes les admissions avec :\n",
+            "- `patient_id` : identifiant du patient\n",
+            "- `ESI` : niveau d'urgence (pour voir si les patients critiques sont bien réinjectés en priorité)\n",
+            "- `reason` : cause de mise en quarantaine (`no_feasible_hospital` ou `reinjection_failed`)\n",
+            "- `admitted_at` : timestamp d'entrée\n\n",
+            "**Idéalement**, les patients ESI 1 et 2 ne doivent jamais rester longtemps en quarantaine.\n\n",
+            "> Si beaucoup de patients ESI 1–2 sont en quarantaine, cela signale une **saturation critique** du système hospitalier."
+        ]
+    },
+    {
+        "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+        "source": [
+            "q_summary = engine.quarantine.summary()\n",
+            "if not q_summary.empty:\n",
+            "    print('Zone de quarantaine — patients en attente:')\n",
+            "    print(q_summary.to_string(index=False))\n",
+            "    fig, ax = plt.subplots(figsize=(7,4))\n",
+            "    q_summary['ESI'].value_counts().sort_index().plot(kind='bar', ax=ax, color='coral')\n",
+            "    ax.set_title('Distribution ESI — Zone de quarantaine')\n",
+            "    ax.set_xlabel('Niveau ESI'); ax.set_ylabel('Nombre de patients')\n",
+            "    plt.tight_layout()\n",
+            "    plt.savefig(OUT/'quarantine_esi.png', dpi=120)\n",
+            "    plt.show()\n",
+            "else:\n",
+            "    print('Aucun patient en quarantaine — tous ont été alloués !')"
+        ]
+    },
+]
+
+notebook = {
+    "cells": cells,
+    "metadata": {
+        "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+        "language_info": {"name": "python", "version": "3.10.0"}
+    },
+    "nbformat": 4, "nbformat_minor": 5
+}
+
+with open("allocation_demo.ipynb", "w", encoding="utf-8") as f:
+    json.dump(notebook, f, indent=2, ensure_ascii=False)
+
+print("Notebook 'allocation_demo.ipynb' créé avec succès !")
