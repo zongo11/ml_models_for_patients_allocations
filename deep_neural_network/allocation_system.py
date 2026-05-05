@@ -304,8 +304,8 @@ class AllocationEngine:
       2. Utilise le DNN pour scorer chaque hôpital.
       3. Vérifie la faisabilité en temps réel (ressources actuelles).
       4. Si aucun hôpital → quarantaine.
-      5. Réinjection automatique depuis la quarantaine à chaque libération.
-    """
+      5. Réinjection automatique depuis la quarantaine à chaque libération.      6. Mise à jour des ressources hospitalières avec réévaluation de la quarantaine.
+      7. Synthèse des ressources système totales disponibles.    """
 
     def __init__(
         self,
@@ -354,7 +354,13 @@ class AllocationEngine:
 
         x = torch.FloatTensor(np.concatenate([p_norm, h_norm])).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            return float(self.model(x).item())
+            dnn_score = float(self.model(x).item())
+        
+        # Bonus pour hôpitaux avec plus de ressources (Si H4 a plus de ressources -> préférence)
+        # On utilise l'inverse de la saturation comme multiplicateur
+        resource_bonus = 1.0 + (1.0 - hosp.saturation) * 0.2
+        
+        return dnn_score * resource_bonus
 
     # --- Allocation d'un patient ---
 
@@ -459,6 +465,54 @@ class AllocationEngine:
 
         # Réinjection automatique
         return self.reinject()
+
+    def update_hospital_resources(self, hospital_name: str, resource_updates: Dict[str, float]) -> Dict[str, int]:
+        """
+        Met à jour les ressources disponibles d'un hôpital et relance la réinjection.
+
+        Cette méthode permet de couvrir le cas où les ressources changent
+        en dehors d'une sortie de patient (mise à jour manuelle ou intervention
+        du système central). Après mise à jour, les patients en quarantaine sont
+        retentés immédiatement.
+        """
+        if hospital_name not in self.hospitals:
+            return {"reinjected": 0, "still_waiting": len(self.quarantine)}
+
+        hospital = self.hospitals[hospital_name]
+        with hospital._lock:
+            for col, delta in resource_updates.items():
+                if col in hospital._current:
+                    hospital._current[col] = min(
+                        hospital._max[col],
+                        max(0.0, hospital._current[col] + float(delta))
+                    )
+
+        return self.reinject()
+
+    def system_resource_summary(self) -> Dict[str, float]:
+        """
+        Retourne un résumé des ressources totales et disponibles du système.
+
+        Ceci permet de vérifier que le système central de ressources est
+        toujours couvert dans l'allocation, même si la décision est prise
+        sur la base de ressources hospitalières individuelles.
+        """
+        total = defaultdict(float)
+        available = defaultdict(float)
+        for hospital in self.hospitals.values():
+            for col in HOSPITAL_RESOURCE_COLS:
+                total[col] += hospital._max.get(col, 0.0)
+                available[col] += hospital._current.get(col, 0.0)
+
+        summary = {
+            f"total_{col}": float(total[col]) for col in HOSPITAL_RESOURCE_COLS
+        }
+        summary.update({
+            f"available_{col}": float(available[col]) for col in HOSPITAL_RESOURCE_COLS
+        })
+        summary["hospitals_saturated"] = sum(1 for h in self.hospitals.values() if h.is_saturated)
+        summary["hospitals_available"] = len(self.hospitals) - summary["hospitals_saturated"]
+        return summary
 
     # --- Tableau de bord ---
 
